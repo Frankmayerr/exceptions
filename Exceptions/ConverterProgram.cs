@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Serialization;
 using NLog;
+using NLog.LayoutRenderers;
 
 namespace Exceptions
 {
@@ -31,16 +32,28 @@ namespace Exceptions
 		private static void ConvertFiles(string[] filenames, Settings settings)
 		{
 			var tasks = filenames
-				.Select(fn => Task.Run(() => ConvertFile(fn, settings))) 
+				.Select(fn => Task.Run(() => ConvertFile(fn, settings))
+				)
+				//.ContinueWith(task => HandleException(task))) 
+
 				.ToArray();
 			Task.WaitAll(tasks); 
 		}
 
 		private static Settings LoadSettings() 
 		{
-			var serializer = new XmlSerializer(typeof(Settings));
-			var content = File.ReadAllText("settings.xml");
-			return (Settings) serializer.Deserialize(new StringReader(content));
+			//if (!File.Exists("settings.xml"))
+			try
+			{
+				var serializer = new XmlSerializer(typeof(Settings));
+				var content = File.ReadAllText("settings.xml");
+				return (Settings) serializer.Deserialize(new StringReader(content));
+			}
+			catch (Exception e)
+			{
+				log.Error(e.InnerException, "Не удалось прочитать файл настроек");
+				return Settings.Default;
+			}
 		}
 
 		private static void ConvertFile(string filename, Settings settings)
@@ -52,20 +65,28 @@ namespace Exceptions
 				log.Info("Source Culture " + Thread.CurrentThread.CurrentCulture.Name);
 			}
 			IEnumerable<string> lines;
-			try 
+
+			try
 			{
-				lines = PrepareLines(filename); 
+				lines = PrepareLines(filename);
+				var convertedLines = lines
+					.Select(ConvertLine)
+					.Select(s => s.Length + " " + s);
+				File.WriteAllLines(filename + ".out", convertedLines);
+
+			}
+			catch (FileNotFoundException e)
+			{
+				log.Error($"Не удалось сконвертировать {filename} FileNotFoundException");
+				return;
 			}
 			catch
 			{
-				log.Error($"File {filename} not found"); 
+				log.Error("Некорректная строка");
 				return;
 			}
-			var convertedLines = lines
-				.Select(ConvertLine)
-				.Select(s => s.Length + " " + s);
-			File.WriteAllLines(filename + ".out", convertedLines);
 		}
+
 
 		private static IEnumerable<string> PrepareLines(string filename)
 		{
@@ -81,21 +102,11 @@ namespace Exceptions
 
 	    public static string ConvertLine(string arg) 
 		{												
-			try
-			{
-				return ConvertAsDateTime(arg);
-			}
-			catch
-			{
-				try
-				{
-					return ConvertAsDouble(arg);
-				}
-				catch
-				{
-					return ConvertAsCharIndexInstruction(arg);
-				}
-			}
+			if (DateTime.TryParse(arg, out var dateTime))
+				return dateTime.ToString();
+			if (double.TryParse(arg, out var doubleResult))
+				return doubleResult.ToString();
+			return ConvertAsCharIndexInstruction(arg);
 		}
 
 		private static string ConvertAsCharIndexInstruction(string s)
